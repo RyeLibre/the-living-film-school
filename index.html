@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>The Living Film School · review copy</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700&display=swap">
+  <style>
+    html, body { margin: 0; background: #121212; color: #ececec; font-family: Montserrat, "Segoe UI", system-ui, sans-serif; font-weight: 300; }
+    .gate { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 16px; box-sizing: border-box; }
+    .gate form { background: #1b1b1b; border: 1px solid #2e2e2e; border-radius: 12px; padding: 28px; width: 100%; max-width: 380px; display: flex; flex-direction: column; gap: 14px; }
+    .gate .brand { letter-spacing: .2em; text-transform: uppercase; font-weight: 500; font-size: 18px; }
+    .gate .brand span { color: #e8c27a; }
+    .gate p { margin: 0; color: #9a9a9a; font-size: 14px; line-height: 1.5; }
+    .gate input[type=password] { background: #232323; border: 1px solid #2e2e2e; border-radius: 8px; color: #ececec; padding: 11px 12px; font: inherit; font-size: 15px; }
+    .gate button { background: #e8c27a; color: #1a1408; border: 0; border-radius: 8px; padding: 11px; font: inherit; font-weight: 600; cursor: pointer; }
+    .gate button:disabled { opacity: .6; }
+    .gate label.keep { display: flex; gap: 8px; align-items: center; font-size: 13px; color: #9a9a9a; }
+    .gate .err { color: #e57373; font-size: 13px; min-height: 18px; }
+  </style>
+</head>
+<body>
+  <div class="gate" id="gate"><form id="f">
+    <div class="brand">The Living <span>Film</span> School</div>
+    <p>This is a private review copy. Enter the password you were given.</p>
+    <input type="password" id="pw" autocomplete="current-password" aria-label="Password" autofocus>
+    <label class="keep"><input type="checkbox" id="keep" checked> Remember on this device</label>
+    <div class="err" id="err"></div>
+    <button id="go">Open</button>
+  </form></div>
+  <script>
+  (function () {
+    var STORE = 'lfs-review-key';
+    var b64 = function (buf) { return btoa(String.fromCharCode.apply(null, new Uint8Array(buf))); };
+    var unb64 = function (s) { return Uint8Array.from(atob(s), function (c) { return c.charCodeAt(0); }); };
+    var bundle = fetch('site.bin', { cache: 'no-cache' }).then(function (r) { return r.arrayBuffer(); });
+    async function keyFrom(pw, salt) {
+      var base = await crypto.subtle.importKey('raw', new TextEncoder().encode(pw), 'PBKDF2', false, ['deriveKey']);
+      return crypto.subtle.deriveKey({ name: 'PBKDF2', salt: salt, iterations: 600000, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, true, ['decrypt']);
+    }
+    async function open(key, data) {
+      var plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: data.slice(16, 28) }, key, data.slice(28));
+      var json = await new Response(new Blob([plain]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+      return JSON.parse(json);
+    }
+    function run(files) {
+      // the styles and the page
+      var st = document.createElement('style'); st.textContent = files['styles.css'] || ''; document.head.appendChild(st);
+      document.body.innerHTML = '<div id="app" aria-live="polite"></div><div id="toast" class="toast" hidden></div>';
+      document.title = 'The Living Film School';
+      // the data files are served from memory
+      var base = location.href.replace(/[?#].*$/, '').replace(/[^/]*$/, '');
+      var realFetch = window.fetch.bind(window);
+      window.fetch = function (input, init) {
+        var url = typeof input === 'string' ? input : input.url;
+        var abs = new URL(url, base).href;
+        if (abs.indexOf(base) === 0) {
+          var rel = abs.slice(base.length);
+          if (Object.prototype.hasOwnProperty.call(files, rel)) return Promise.resolve(new Response(files[rel], { headers: { 'content-type': /\.json$/.test(rel) ? 'application/json' : 'text/plain' } }));
+        }
+        return realFetch(input, init);
+      };
+      // the scripts load from memory, through an import map
+      var map = { imports: {} };
+      Object.keys(files).forEach(function (f) { if (/\.js$/.test(f)) map.imports['lfs/' + f] = URL.createObjectURL(new Blob([files[f]], { type: 'text/javascript' })); });
+      var im = document.createElement('script'); im.type = 'importmap'; im.textContent = JSON.stringify(map); document.head.appendChild(im);
+      import('lfs/app.js').catch(function (e) { document.body.innerHTML = '<p style="padding:24px">The app could not start: ' + e.message + '</p>'; });
+    }
+    async function tryKey(key) { var data = new Uint8Array(await bundle); return open(key, data); }
+    // a remembered key opens straight away
+    var kept = null; try { kept = localStorage.getItem(STORE); } catch (e) { }
+    if (kept) {
+      crypto.subtle.importKey('raw', unb64(kept), 'AES-GCM', true, ['decrypt']).then(tryKey).then(run).catch(function () { try { localStorage.removeItem(STORE); } catch (e) { } });
+    }
+    document.getElementById('f').onsubmit = async function (e) {
+      e.preventDefault();
+      var go = document.getElementById('go'), err = document.getElementById('err');
+      err.textContent = ''; go.disabled = true; go.textContent = 'Opening…';
+      try {
+        var data = new Uint8Array(await bundle);
+        var key = await keyFrom(document.getElementById('pw').value, data.slice(0, 16));
+        var files = await open(key, data);
+        if (document.getElementById('keep').checked) { try { localStorage.setItem(STORE, b64(await crypto.subtle.exportKey('raw', key))); } catch (e) { } }
+        run(files);
+      } catch (ex) { err.textContent = ex && ex.name === 'OperationError' ? 'That password isn’t right.' : 'Could not open: ' + (ex && ex.message); go.disabled = false; go.textContent = 'Open'; }
+    };
+  })();
+  </script>
+</body>
+</html>
